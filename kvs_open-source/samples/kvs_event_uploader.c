@@ -160,7 +160,7 @@ static int upload_event_window(KvsProducerClient* client, AppConfig* app)
                 videoFrame.data = app->video.buffer;
                 videoFrame.size = bytes;
                 videoFrame.ptsMs = ts;
-                videoFrame.isKeyFrame = (videoFrameIndex % KEY_FRAME_INTERVAL) == 0 ? 1 : 0;
+                videoFrame.isKeyFrame = (videoFrameIndex % KEY_FRAME_INTERVAL) == 0;
                 videoFrame.isAudio = 0;
                 kvsProducerPutFrame(stream, &videoFrame);
                 videoFrameIndex++;
@@ -181,7 +181,16 @@ static int upload_event_window(KvsProducerClient* client, AppConfig* app)
             }
             nextAudioMs += AUDIO_FRAME_INTERVAL_MS;
         }
-        usleep(1000);
+        {
+            uint64_t nextDeadlineMs = nextVideoMs < nextAudioMs ? nextVideoMs : nextAudioMs;
+            uint64_t now = now_ms();
+            if (nextDeadlineMs > now) {
+                uint64_t sleepMs = nextDeadlineMs - now;
+                usleep((useconds_t) (sleepMs * 1000));
+            } else {
+                usleep(1000);
+            }
+        }
     }
 
     kvsProducerFreeStream(stream);
