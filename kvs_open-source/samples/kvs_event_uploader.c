@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <limits.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -185,13 +184,13 @@ static int upload_event_window(KvsProducerClient* client, AppConfig* app)
             nextAudioMs += AUDIO_FRAME_INTERVAL_MS;
         }
         {
-            uint64_t nextDeadlineMs = nextVideoMs < nextAudioMs ? nextVideoMs : nextAudioMs;
+            uint64_t nextFrameDeadlineMs = nextVideoMs < nextAudioMs ? nextVideoMs : nextAudioMs;
             uint64_t now = now_ms();
-            if (nextDeadlineMs > now) {
-                uint64_t sleepMs = nextDeadlineMs - now;
+            if (nextFrameDeadlineMs > now) {
+                uint64_t sleepMs = nextFrameDeadlineMs - now;
                 uint64_t sleepUs = sleepMs * 1000ULL;
-                if (sleepUs > (uint64_t) UINT_MAX) {
-                    sleepUs = (uint64_t) UINT_MAX;
+                if (sleepUs > 1000000ULL) {
+                    sleepUs = 1000000ULL;
                 }
                 usleep((useconds_t) sleepUs);
             } else {
