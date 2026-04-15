@@ -66,9 +66,6 @@ int kvs_minimal_producer_create_stream(kvs_minimal_producer_t* producer, const c
         return -1;
     }
 
-    if (strlen(stream_name) >= sizeof(producer->active_stream_name)) {
-        return -1;
-    }
     int ret = snprintf(producer->active_stream_name, sizeof(producer->active_stream_name), "%s", stream_name);
     if (ret < 0 || (size_t) ret >= sizeof(producer->active_stream_name)) {
         return -1;

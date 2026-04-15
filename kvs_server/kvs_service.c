@@ -455,7 +455,7 @@ static void *kvs_service_proc(void *exit_flag)
                 kvs_minimal_producer_put_audio_frame(&producer, &audio_frame, frame_ts_100ns);
             }
 
-            if (now_ms >= current_event_stop_ms || *kvs_exit_flag) {
+            if (now_ms >= current_event_stop_ms) {
                 kvs_minimal_producer_stop_stream(&producer);
                 event_active = false;
             }
