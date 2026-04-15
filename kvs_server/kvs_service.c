@@ -27,6 +27,8 @@
 #define KVS_DEFAULT_EVENT_INTERVAL_MS      (3000ULL)
 #define KVS_DEFAULT_EVENT_DURATION_MS      (10000ULL)
 #define KVS_DEFAULT_FRAME_LOOP_IDLE_US     (10 * 1000)
+#define KVS_CREATE_STREAM_RETRY_DELAY_US   (500 * 1000)
+#define KVS_STREAM_NAME_RETRY_DELAY_US     (100 * 1000)
 #define KVS_VIDEO_STREAM_MAIN_ID           (0)
 
 typedef struct {
@@ -45,6 +47,11 @@ typedef struct {
 /*
  * Platform can provide a strong symbol implementation to extract timestamp from FrameData_t.
  * Return value must be in 100ns units. Returning 0 means "timestamp unavailable".
+ */
+/*
+ * Weak timestamp extraction hook.
+ * Platform integrator can override this symbol and return frame timestamp in 100ns units.
+ * Return 0 when timestamp is unavailable/invalid; caller will fallback to current wall clock.
  */
 __attribute__((weak)) uint64_t kvs_extract_frame_timestamp_100ns(const FrameData_t* frame)
 {
@@ -79,7 +86,7 @@ static uint64_t kvs_get_env_u64(const char* name, uint64_t default_value)
 
     char* end_ptr = NULL;
     uint64_t parsed = strtoull(value, &end_ptr, 10);
-    if (end_ptr == value || (end_ptr != NULL && *end_ptr != '\0')) {
+    if (end_ptr == value || *end_ptr != '\0') {
         return default_value;
     }
 
@@ -422,17 +429,18 @@ static void *kvs_service_proc(void *exit_flag)
 		uint64_t now_ms = kvs_now_ms();
 
         if (!event_active && now_ms >= next_event_trigger_ms) {
-            if (kvs_generate_event_stream_name(&uplink_env, ++event_seq, stream_name, sizeof(stream_name)) == 0) {
+            event_seq++;
+            if (kvs_generate_event_stream_name(&uplink_env, event_seq, stream_name, sizeof(stream_name)) == 0) {
                 if (kvs_minimal_producer_create_stream(&producer, stream_name) == 0) {
                     event_active = true;
                     current_event_stop_ms = now_ms + uplink_env.event_duration_ms;
                     next_event_trigger_ms = now_ms + uplink_env.event_interval_ms;
                     fii_log_info("CreateStream success, stream=%s\n", stream_name);
                 } else {
-                    usleep(500 * 1000);
+                    usleep(KVS_CREATE_STREAM_RETRY_DELAY_US);
                 }
             } else {
-                usleep(100 * 1000);
+                usleep(KVS_STREAM_NAME_RETRY_DELAY_US);
             }
         }
 

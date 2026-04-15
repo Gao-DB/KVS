@@ -13,16 +13,25 @@ typedef struct {
     const char* ca_cert_path;
 } kvs_minimal_producer_config_t;
 
+#define KVS_MIN_REGION_MAX_LEN             (128)
+#define KVS_MIN_ACCESS_KEY_MAX_LEN         (256)
+#define KVS_MIN_SECRET_KEY_MAX_LEN         (256)
+#define KVS_MIN_SESSION_TOKEN_MAX_LEN      (2048)
+#define KVS_MIN_CERT_PATH_MAX_LEN          (512)
+#define KVS_MIN_PRIVATE_KEY_PATH_MAX_LEN   (512)
+#define KVS_MIN_CA_CERT_PATH_MAX_LEN       (512)
+#define KVS_MIN_STREAM_NAME_MAX_LEN        (256)
+
 typedef struct {
     kvs_minimal_producer_config_t config;
-    char region[128];
-    char access_key_id[256];
-    char secret_access_key[256];
-    char session_token[2048];
-    char cert_path[512];
-    char private_key_path[512];
-    char ca_cert_path[512];
-    char active_stream_name[256];
+    char region[KVS_MIN_REGION_MAX_LEN];
+    char access_key_id[KVS_MIN_ACCESS_KEY_MAX_LEN];
+    char secret_access_key[KVS_MIN_SECRET_KEY_MAX_LEN];
+    char session_token[KVS_MIN_SESSION_TOKEN_MAX_LEN];
+    char cert_path[KVS_MIN_CERT_PATH_MAX_LEN];
+    char private_key_path[KVS_MIN_PRIVATE_KEY_PATH_MAX_LEN];
+    char ca_cert_path[KVS_MIN_CA_CERT_PATH_MAX_LEN];
+    char active_stream_name[KVS_MIN_STREAM_NAME_MAX_LEN];
     int initialized;
     int stream_created;
 } kvs_minimal_producer_t;

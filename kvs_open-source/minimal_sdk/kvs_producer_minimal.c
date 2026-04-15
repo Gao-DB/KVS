@@ -74,12 +74,10 @@ int kvs_minimal_producer_create_stream(kvs_minimal_producer_t* producer, const c
         return -1;
     }
     producer->stream_created = 1;
-    printf("[kvs-minimal] CreateStream stream=%s region=%s cert=%s key=%s ca=%s\n",
+    printf("[kvs-minimal] CreateStream stream=%s region=%s tls_configured=%s\n",
            producer->active_stream_name,
            producer->config.region,
-           producer->config.cert_path != NULL ? producer->config.cert_path : "(null)",
-           producer->config.private_key_path != NULL ? producer->config.private_key_path : "(null)",
-           producer->config.ca_cert_path != NULL ? producer->config.ca_cert_path : "(null)");
+           (producer->config.cert_path != NULL || producer->config.private_key_path != NULL || producer->config.ca_cert_path != NULL) ? "yes" : "no");
     return 0;
 }
 
