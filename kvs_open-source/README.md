@@ -139,6 +139,29 @@ For audio only, run `./kvsAudioOnlyStreamingSample <stream-name> <streaming_dura
 
 This will stream the audio files from the `samples/aacSampleFrames` or `samples/alawSampleFrames` (as per the choice of audio codec in the last argument) respectively. 
 
+### Event uploader sample
+
+`kvs_event_uploader` provides a device-side event upload flow that creates a new stream per event and uploads a fixed media window.
+
+Build:
+```sh
+mkdir -p build && cd build
+cmake ..
+cmake --build . --target kvs_event_uploader
+```
+
+Run:
+```sh
+export AWS_KVS_CA_CERT_PATH=/path/to/ca.pem
+export AWS_KVS_CLIENT_CERT_PATH=/path/to/client.crt
+export AWS_KVS_CLIENT_PRIVATE_KEY_PATH=/path/to/client.key
+./kvs_event_uploader
+```
+
+Optional environment variables:
+* `KVS_EVENT_TRIGGER_SECONDS` (default `30`) - timer period for simulated event trigger.
+* `KVS_EVENT_UPLOAD_SECONDS` (default `12`) - upload duration for each event stream window.
+
 ### Running with IoT credential provider
 
 To run the samples with IoT credential provider:
