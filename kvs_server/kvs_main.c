@@ -1,14 +1,16 @@
 #include <signal.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 
 #include "kvs_service.h"
-#include "kvs_msg.h"
-
-//extern volatile sig_atomic_t kvs_process_exit_flag;
 
 int main(int argc, char *argv[])
 {
+	int event_idx = 0;
+	char event_name[COMMON_STRING_LEN] = {0};
+	time_t now = 0;
 
 	fii_log_tag_set("KVS");
     // fii_log_level_set(FII_LOG_LEVEL_MAX);
@@ -17,8 +19,10 @@ int main(int argc, char *argv[])
 
 	while(kvs_service_get_status() == KVS_SERVICE_STATUS_OK)
 	{
-		
-		sleep(1);
+		now = time(NULL);
+		snprintf(event_name, sizeof(event_name), "event-file-%ld-%d", (long) now, event_idx++);
+		kvs_service_trigger_event(event_name);
+		sleep(15);
 	}
 	
 exit01:

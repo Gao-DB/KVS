@@ -223,4 +223,14 @@ int get_audio_frame_data(MapInfo_t *map_info,int* index, FrameData_t* Frame)
 	return ret;
 }
 
+int open_local_file(const char* filePath)
+{
+	if (filePath == NULL || filePath[0] == '\0')
+	{
+		return -1;
+	}
+
+	return access(filePath, F_OK);
+}
+
 
