@@ -184,10 +184,10 @@ static int upload_event_window(KvsProducerClient* client, AppConfig* app)
             nextAudioMs += AUDIO_FRAME_INTERVAL_MS;
         }
         {
-            uint64_t nextFrameDeadlineMs = nextVideoMs < nextAudioMs ? nextVideoMs : nextAudioMs;
+            uint64_t earliestFrameMs = nextVideoMs < nextAudioMs ? nextVideoMs : nextAudioMs;
             uint64_t now = now_ms();
-            if (nextFrameDeadlineMs > now) {
-                uint64_t sleepMs = nextFrameDeadlineMs - now;
+            if (earliestFrameMs > now) {
+                uint64_t sleepMs = earliestFrameMs - now;
                 uint64_t sleepUs = sleepMs * 1000ULL;
                 if (sleepUs > 1000000ULL) {
                     sleepUs = 1000000ULL;
@@ -237,7 +237,7 @@ int main(void)
         if (ret != 0) {
             fprintf(stderr, "event upload failed: %d\n", ret);
         }
-        for (int i = 0; i < app.triggerIntervalSec && !g_stop; ++i) {
+        for (int secondsElapsed = 0; secondsElapsed < app.triggerIntervalSec && !g_stop; ++secondsElapsed) {
             sleep(1);
         }
     }
