@@ -1,0 +1,3 @@
+/home/runner/work/KVS/KVS/build/kvs_server/CMakeFiles/kvs_event_uploader.dir
+/home/runner/work/KVS/KVS/build/kvs_server/CMakeFiles/edit_cache.dir
+/home/runner/work/KVS/KVS/build/kvs_server/CMakeFiles/rebuild_cache.dir

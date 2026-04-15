@@ -6,25 +6,17 @@
 #if defined(__GNUC__)
 __attribute__((weak)) int get_video_frame_data(uint8_t **data, int *len, uint64_t *pts)
 {
-    static uint8_t fallback_video_data[1] = {0};
     if (data == NULL || len == NULL || pts == NULL) {
         return -1;
     }
-    *data = fallback_video_data;
-    *len = 1;
-    *pts = 0;
     return -1;
 }
 
 __attribute__((weak)) int get_audio_frame_data(uint8_t **data, int *len, uint64_t *pts)
 {
-    static uint8_t fallback_audio_data[1] = {0};
     if (data == NULL || len == NULL || pts == NULL) {
         return -1;
     }
-    *data = fallback_audio_data;
-    *len = 1;
-    *pts = 0;
     return -1;
 }
 #endif

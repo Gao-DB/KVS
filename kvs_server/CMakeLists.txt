@@ -5,7 +5,10 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 option(KVS_ENABLE_PRODUCER_SDK "Enable amazon-kinesis-video-streams-producer-c integration" ON)
-set(KVS_PRODUCER_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../kvs_open-source" CACHE PATH "Path to amazon-kinesis-video-streams-producer-c")
+set(KVS_PRODUCER_SDK_ROOT "" CACHE PATH "Path to amazon-kinesis-video-streams-producer-c")
+if(NOT KVS_PRODUCER_SDK_ROOT AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../kvs_open-source")
+    set(KVS_PRODUCER_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../kvs_open-source")
+endif()
 
 add_executable(kvs_event_uploader
     kvs_main.c

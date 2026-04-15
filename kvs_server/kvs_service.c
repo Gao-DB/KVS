@@ -16,6 +16,9 @@
 #define KVS_UPLOAD_SECONDS 12
 #define KVS_CREATE_MAX_RETRY 5
 #define KVS_EVENT_STREAM_NAME_MAX 128
+#define KVS_BACKOFF_INITIAL_MS 200
+#define KVS_BACKOFF_MAX_MS 2000
+#define KVS_FRAME_POLL_INTERVAL_MS 10
 
 typedef enum {
     KVS_UPLOAD_RESULT_OK = 0,
@@ -162,14 +165,15 @@ static void build_event_stream_name(char* out_name, size_t out_size, uint32_t ev
 {
     const char* prefix = getenv("KVS_STREAM_PREFIX");
     time_t now = time(NULL);
+    unsigned long ts = now > 0 ? (unsigned long) now : 0UL;
     if (prefix == NULL || prefix[0] == '\0') {
         prefix = "event";
     }
 
     if (suffix == 0) {
-        (void) snprintf(out_name, out_size, "%s-%lu-%u", prefix, (unsigned long) now, event_id);
+        (void) snprintf(out_name, out_size, "%s-%lu-%u", prefix, ts, event_id);
     } else {
-        (void) snprintf(out_name, out_size, "%s-%lu-%u-%u", prefix, (unsigned long) now, event_id, suffix);
+        (void) snprintf(out_name, out_size, "%s-%lu-%u-%u", prefix, ts, event_id, suffix);
     }
 }
 
@@ -180,7 +184,7 @@ static kvs_upload_result_t create_stream_with_retry(kvs_producer_ctx_t* producer
 {
     uint32_t attempt;
     uint32_t suffix = 0;
-    uint32_t backoff_ms = 200;
+    uint32_t backoff_ms = KVS_BACKOFF_INITIAL_MS;
 
     for (attempt = 0; attempt < KVS_CREATE_MAX_RETRY; ++attempt) {
         build_event_stream_name(created_stream_name, stream_name_size, event_id, suffix);
@@ -201,7 +205,11 @@ static kvs_upload_result_t create_stream_with_retry(kvs_producer_ctx_t* producer
         if (ret == KVS_UPLOAD_RESULT_RETRYABLE) {
             kvs_log("WARN", "CreateStream retryable failure stream=%s backoff=%ums", created_stream_name, backoff_ms);
             usleep(backoff_ms * 1000U);
-            backoff_ms *= 2;
+            if (backoff_ms >= KVS_BACKOFF_MAX_MS / 2U) {
+                backoff_ms = KVS_BACKOFF_MAX_MS;
+            } else {
+                backoff_ms *= 2U;
+            }
             continue;
         }
 
@@ -240,7 +248,7 @@ static int upload_event_clip(kvs_producer_ctx_t* producer, uint32_t event_id)
             (void) kvs_producer_put_frame(producer, stream_name, false, &frame);
         }
 
-        usleep(10 * 1000);
+        usleep(KVS_FRAME_POLL_INTERVAL_MS * 1000);
     }
 
     (void) kvs_producer_stop_stream(producer, stream_name);
@@ -303,11 +311,13 @@ static void* kvs_service_proc(void* arg)
 
 int kvs_service_trigger_event_upload(void)
 {
+    uint32_t pending = 0;
     pthread_mutex_lock(&g_event_lock);
     g_pending_events++;
+    pending = g_pending_events;
+    kvs_log("INFO", "Event trigger received, pending=%u", pending);
     pthread_cond_signal(&g_event_cond);
     pthread_mutex_unlock(&g_event_lock);
-    kvs_log("INFO", "Event trigger received, pending=%u", g_pending_events);
     return 0;
 }
 

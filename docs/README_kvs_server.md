@@ -8,7 +8,7 @@
 
 ## Build
 ```bash
-cd /home/runner/work/KVS/KVS
+cd <PROJECT_ROOT>
 cmake -S kvs_server -B build/kvs_server
 cmake --build build/kvs_server --target kvs_event_uploader
 ```
@@ -17,7 +17,7 @@ cmake --build build/kvs_server --target kvs_event_uploader
 This uploader is designed to integrate with the full
 `amazon-kinesis-video-streams-producer-c` source under:
 
-`/home/runner/work/KVS/KVS/kvs_open-source`
+`<PROJECT_ROOT>/kvs_open-source`
 
 If the full SDK is not present, keep this path as a submodule/reference and populate it with upstream sources without modifying SDK code.
 
@@ -40,10 +40,10 @@ Expected production flow:
 
 ## Run (simulated trigger)
 ```bash
-/home/runner/work/KVS/KVS/build/kvs_server/kvs_event_uploader [event_count] [trigger_interval_sec]
+./build/kvs_server/kvs_event_uploader [event_count] [trigger_interval_sec]
 ```
 
 Example:
 ```bash
-/home/runner/work/KVS/KVS/build/kvs_server/kvs_event_uploader 2 1
+./build/kvs_server/kvs_event_uploader 2 1
 ```
