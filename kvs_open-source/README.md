@@ -92,6 +92,28 @@ To build the library run make in the build directory you executed CMake.
 
 `make`
 
+### Minimal in-repo SDK subset (this repository)
+This repository carries a minimal producer SDK subset needed for device-side integration and samples:
+
+* `include/` - public SDK header (`kvs_producer_sdk.h`)
+* `src/` - producer core, client, default serializer, default network, and utils
+* `samples/kvs_server/` - event-driven device sample that dynamically calls `CreateStream` for each event and pushes 12 seconds of audio/video frames
+
+Build locally:
+
+```bash
+mkdir -p build && cd build
+cmake ../kvs_open-source
+cmake --build .
+```
+
+Cross compilation is supported via standard CMake toolchain usage:
+
+```bash
+cmake -S ../kvs_open-source -B build -DCMAKE_TOOLCHAIN_FILE=<toolchain.cmake>
+cmake --build build
+```
+
 ### Run samples
 To run the samples:
 
@@ -99,6 +121,20 @@ To run the samples:
 export AWS_SECRET_ACCESS_KEY=<YourAWSSecretAccessKey>
 export AWS_ACCESS_KEY_ID=<YourAWSAccessKey>
 ```
+For the device-side sample in this repository:
+
+```bash
+./samples/kvs_server/kvs_server [event_count] [trigger_interval_sec]
+```
+
+Example:
+
+```bash
+./samples/kvs_server/kvs_server 2 3
+```
+
+Each triggered event creates a new stream named `event-<timestamp>-<seq>` and pushes simulated audio/video data for 12 seconds.
+
 For audio+video, run `./kvsAudioVideoStreamingSample <stream-name> <streaming-duration-in-seconds> <sample-location> <audio-codec> <video-codec> <images-flag>`
 
 The last 5 arguments are optional. By default, 
