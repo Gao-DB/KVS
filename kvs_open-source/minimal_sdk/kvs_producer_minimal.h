@@ -15,6 +15,13 @@ typedef struct {
 
 typedef struct {
     kvs_minimal_producer_config_t config;
+    char region[128];
+    char access_key_id[256];
+    char secret_access_key[256];
+    char session_token[2048];
+    char cert_path[512];
+    char private_key_path[512];
+    char ca_cert_path[512];
     char active_stream_name[256];
     int initialized;
     int stream_created;

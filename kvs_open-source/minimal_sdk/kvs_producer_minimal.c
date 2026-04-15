@@ -8,6 +8,20 @@ static int kvs_minimal_is_ready(kvs_minimal_producer_t* producer)
     return (producer != NULL && producer->initialized != 0);
 }
 
+static void kvs_copy_optional(char* dst, size_t dst_size, const char* src)
+{
+    if (dst == NULL || dst_size == 0) {
+        return;
+    }
+
+    if (src == NULL) {
+        dst[0] = '\0';
+        return;
+    }
+
+    snprintf(dst, dst_size, "%s", src);
+}
+
 int kvs_minimal_producer_init(const kvs_minimal_producer_config_t* cfg, kvs_minimal_producer_t* producer)
 {
     if (cfg == NULL || producer == NULL || cfg->region == NULL || cfg->access_key_id == NULL || cfg->secret_access_key == NULL) {
@@ -15,7 +29,20 @@ int kvs_minimal_producer_init(const kvs_minimal_producer_config_t* cfg, kvs_mini
     }
 
     memset(producer, 0x0, sizeof(*producer));
-    producer->config = *cfg;
+    kvs_copy_optional(producer->region, sizeof(producer->region), cfg->region);
+    kvs_copy_optional(producer->access_key_id, sizeof(producer->access_key_id), cfg->access_key_id);
+    kvs_copy_optional(producer->secret_access_key, sizeof(producer->secret_access_key), cfg->secret_access_key);
+    kvs_copy_optional(producer->session_token, sizeof(producer->session_token), cfg->session_token);
+    kvs_copy_optional(producer->cert_path, sizeof(producer->cert_path), cfg->cert_path);
+    kvs_copy_optional(producer->private_key_path, sizeof(producer->private_key_path), cfg->private_key_path);
+    kvs_copy_optional(producer->ca_cert_path, sizeof(producer->ca_cert_path), cfg->ca_cert_path);
+    producer->config.region = producer->region;
+    producer->config.access_key_id = producer->access_key_id;
+    producer->config.secret_access_key = producer->secret_access_key;
+    producer->config.session_token = producer->session_token[0] != '\0' ? producer->session_token : NULL;
+    producer->config.cert_path = producer->cert_path[0] != '\0' ? producer->cert_path : NULL;
+    producer->config.private_key_path = producer->private_key_path[0] != '\0' ? producer->private_key_path : NULL;
+    producer->config.ca_cert_path = producer->ca_cert_path[0] != '\0' ? producer->ca_cert_path : NULL;
     producer->initialized = 1;
     return 0;
 }
@@ -36,6 +63,9 @@ int kvs_minimal_producer_create_stream(kvs_minimal_producer_t* producer, const c
         return -1;
     }
 
+    if (strlen(stream_name) >= sizeof(producer->active_stream_name)) {
+        return -1;
+    }
     snprintf(producer->active_stream_name, sizeof(producer->active_stream_name), "%s", stream_name);
     producer->stream_created = 1;
     printf("[kvs-minimal] CreateStream stream=%s region=%s cert=%s key=%s ca=%s\n",

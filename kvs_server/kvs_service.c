@@ -27,6 +27,7 @@
 #define KVS_DEFAULT_EVENT_INTERVAL_MS      (3000ULL)
 #define KVS_DEFAULT_EVENT_DURATION_MS      (10000ULL)
 #define KVS_DEFAULT_FRAME_LOOP_IDLE_US     (10 * 1000)
+#define KVS_VIDEO_STREAM_MAIN_ID           (0)
 
 typedef struct {
     const char* region;
@@ -111,7 +112,7 @@ static int kvs_load_uplink_env(kvs_uplink_env_t* env)
          * 8) KVS_STREAM_PREFIX (optional, default "event")
          * 9) KVS_EVENT_INTERVAL_MS / KVS_EVENT_DURATION_MS (optional event simulation settings)
          */
-        fii_log_error("Missing mandatory AWS env vars. Required: AWS_REGION/AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY\n");
+        fii_log_error("Missing mandatory AWS env vars. Required: AWS_REGION, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY\n");
         return -1;
     }
 
@@ -130,7 +131,10 @@ static int kvs_generate_event_stream_name(const kvs_uplink_env_t* env, uint64_t 
 
     uint64_t now_ms = kvs_now_ms();
     int written = snprintf(out_name, out_size, "%s-%" PRIu64 "-%" PRIu64, env->stream_prefix, now_ms, seq);
-    return (written > 0 && (size_t) written < out_size) ? 0 : -1;
+    if (written < 0 || (size_t) written >= out_size) {
+        return -1;
+    }
+    return 0;
 }
 
 static pthread_t kvs_pthread_id = 0;
@@ -435,7 +439,7 @@ static void *kvs_service_proc(void *exit_flag)
              * Return value < 0 means no frame/read failure.
              * External frame provider should populate frame payload and timestamp.
              */
-            if (get_video_frame_data(0, &video_read_index, &video_frame) >= 0) {
+            if (get_video_frame_data(KVS_VIDEO_STREAM_MAIN_ID, &video_read_index, &video_frame) >= 0) {
                 uint64_t frame_ts_100ns = kvs_extract_frame_timestamp_100ns(&video_frame);
                 if (frame_ts_100ns == 0) {
                     frame_ts_100ns = kvs_ms_to_100ns(now_ms);
