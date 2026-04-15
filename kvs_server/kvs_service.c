@@ -130,8 +130,8 @@ static int kvs_generate_event_stream_name(const kvs_uplink_env_t* env, uint64_t 
     }
 
     uint64_t now_ms = kvs_now_ms();
-    int written = snprintf(out_name, out_size, "%s-%" PRIu64 "-%" PRIu64, env->stream_prefix, now_ms, seq);
-    if (written < 0 || (size_t) written >= out_size) {
+    int chars_needed = snprintf(out_name, out_size, "%s-%" PRIu64 "-%" PRIu64, env->stream_prefix, now_ms, seq);
+    if (chars_needed < 0 || (size_t) chars_needed >= out_size) {
         return -1;
     }
     return 0;
@@ -361,7 +361,7 @@ static void *kvs_service_proc(void *exit_flag)
     uint64_t next_event_trigger_ms = 0;
     uint64_t current_event_stop_ms = 0;
     bool event_active = false;
-    char stream_name[COMMON_STRING_LEN] = {0};
+    char stream_name[256] = {0};
     kvs_uplink_env_t uplink_env;
     kvs_minimal_producer_config_t producer_cfg;
     kvs_minimal_producer_t producer;
@@ -458,7 +458,6 @@ static void *kvs_service_proc(void *exit_flag)
             if (now_ms >= current_event_stop_ms || *kvs_exit_flag) {
                 kvs_minimal_producer_stop_stream(&producer);
                 event_active = false;
-                memset(stream_name, 0x0, sizeof(stream_name));
             }
         } else {
             usleep(KVS_DEFAULT_FRAME_LOOP_IDLE_US);

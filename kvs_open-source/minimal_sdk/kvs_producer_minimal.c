@@ -19,7 +19,10 @@ static void kvs_copy_optional(char* dst, size_t dst_size, const char* src)
         return;
     }
 
-    snprintf(dst, dst_size, "%s", src);
+    int ret = snprintf(dst, dst_size, "%s", src);
+    if (ret < 0 || (size_t) ret >= dst_size) {
+        dst[dst_size - 1] = '\0';
+    }
 }
 
 int kvs_minimal_producer_init(const kvs_minimal_producer_config_t* cfg, kvs_minimal_producer_t* producer)
@@ -66,7 +69,10 @@ int kvs_minimal_producer_create_stream(kvs_minimal_producer_t* producer, const c
     if (strlen(stream_name) >= sizeof(producer->active_stream_name)) {
         return -1;
     }
-    snprintf(producer->active_stream_name, sizeof(producer->active_stream_name), "%s", stream_name);
+    int ret = snprintf(producer->active_stream_name, sizeof(producer->active_stream_name), "%s", stream_name);
+    if (ret < 0 || (size_t) ret >= sizeof(producer->active_stream_name)) {
+        return -1;
+    }
     producer->stream_created = 1;
     printf("[kvs-minimal] CreateStream stream=%s region=%s cert=%s key=%s ca=%s\n",
            producer->active_stream_name,
