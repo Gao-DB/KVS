@@ -1,27 +1,54 @@
 #include <signal.h>
-#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 #include "kvs_service.h"
-#include "kvs_msg.h"
 
-//extern volatile sig_atomic_t kvs_process_exit_flag;
+static volatile sig_atomic_t g_exit = 0;
 
-int main(int argc, char *argv[])
+static void on_signal(int sig)
 {
+    (void) sig;
+    g_exit = 1;
+}
 
-	fii_log_tag_set("KVS");
-    // fii_log_level_set(FII_LOG_LEVEL_MAX);
-	kvs_service_set_status(KVS_SERVICE_STATUS_OK);
-	kvs_init();
+int main(int argc, char* argv[])
+{
+    int event_count = 1;
+    int trigger_interval_sec = 2;
 
-	while(kvs_service_get_status() == KVS_SERVICE_STATUS_OK)
-	{
-		
-		sleep(1);
-	}
-	
-exit01:
-	kvs_exit();
-	return 0;
+    if (argc > 1) {
+        event_count = atoi(argv[1]);
+        if (event_count <= 0) {
+            event_count = 1;
+        }
+    }
+    if (argc > 2) {
+        trigger_interval_sec = atoi(argv[2]);
+        if (trigger_interval_sec < 0) {
+            trigger_interval_sec = 0;
+        }
+    }
+
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
+
+    if (kvs_service_start() != 0) {
+        fprintf(stderr, "kvs_service_start failed\n");
+        return 1;
+    }
+
+    fprintf(stderr, "[kvs] simulate %d event trigger(s), interval=%ds\n", event_count, trigger_interval_sec);
+    for (int i = 0; i < event_count && !g_exit; ++i) {
+        kvs_service_trigger_event_upload();
+        sleep(trigger_interval_sec);
+    }
+
+    while (!g_exit && kvs_service_get_status() == KVS_SERVICE_STATUS_OK) {
+        sleep(1);
+    }
+
+    kvs_service_stop();
+    return kvs_service_get_status() == KVS_SERVICE_STATUS_OK ? 0 : 1;
 }
