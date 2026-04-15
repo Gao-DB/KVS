@@ -24,6 +24,7 @@ static pthread_t kvs_pthread_id = 0;
 static bool g_kvs_exit = false;
 static pthread_t kvs_select_pthrid = 0;
 static bool g_kvs_select_exit = false;
+g_kvs_service_cfg_t g_kvs_service_cfg;
 
 int g_kvs_service_status = 0;
 
