@@ -6,25 +6,33 @@
 #include <stdbool.h>
 #include <sys/prctl.h>
 #include <sys/types.h>
-#include <sys/socket.h>
 #include <sys/select.h>
 #include <sys/time.h>
 #include <errno.h>
-#include <arpa/inet.h>
-#include <netinet/tcp.h>
 #include <signal.h>
 #include <ucontext.h>
 #include <stdint.h>
-#include <netinet/in.h>
+#include <time.h>
 
+#include "Samples.h"
 #include "kvs_service.h"
-#include "kvs_msg.h"
+#include "kvs_media.h"
+
+#define KVS_DEFAULT_RETENTION_PERIOD   (2 * HUNDREDS_OF_NANOS_IN_AN_HOUR)
+#define KVS_DEFAULT_BUFFER_DURATION    (120 * HUNDREDS_OF_NANOS_IN_A_SECOND)
+#define KVS_EVENT_UPLOAD_DURATION      (12 * HUNDREDS_OF_NANOS_IN_A_SECOND)
+#define KVS_DEFAULT_REGION             "us-east-1"
+#define KVS_STREAM_NAME_MAX_LEN        128
 
 static pthread_t kvs_pthread_id = 0;
 static bool g_kvs_exit = false;
-static pthread_t kvs_select_pthrid = 0;
-static bool g_kvs_select_exit = false;
-g_kvs_service_cfg_t g_kvs_service_cfg;
+kvs_service_cfg_t g_kvs_service_cfg;
+
+static pthread_mutex_t g_kvs_event_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_kvs_event_cond = PTHREAD_COND_INITIALIZER;
+static bool g_kvs_event_pending = false;
+static unsigned long long g_kvs_event_seq = 0;
+static char g_kvs_event_filename[COMMON_STRING_LEN] = {0};
 
 int g_kvs_service_status = 0;
 
@@ -82,6 +90,7 @@ static void sigsegv_handler(int signum, siginfo_t *info, void *ptr)
     char msg[STDERR_OUT_LEN512];
     int ret = 0, cnt = 0;
 
+    (void) ucontext;
     memset(msg, 0x0, STDERR_OUT_LEN512);
     ret = snprintf(msg+cnt, STDERR_OUT_LEN512, "rtsp server Segmentation Fault Trace:\n");
     cnt += ret;
@@ -104,7 +113,7 @@ static void sigsegv_handler(int signum, siginfo_t *info, void *ptr)
 static void shutdown_hander(int sig)
 {
     char msg[STDERR_OUT_LEN64];
-    
+
     memset(msg, 0x0, STDERR_OUT_LEN64);
     if(sig == SIGTERM)
 	{
@@ -123,7 +132,7 @@ static void shutdown_hander(int sig)
 void init_signals(void)
 {
     struct sigaction sa;
-    
+
     /* 配置终止信号 */
     memset(&sa, 0, sizeof(sa));
     sigemptyset(&sa.sa_mask);
@@ -176,11 +185,342 @@ int kvs_service_cfg_get(kvs_service_cfg_t *cfg)
     {
         return -1;
     }
+
     memset(cfg, 0x0, sizeof(kvs_service_cfg_t));
     cfg->Enable = 1;
+    snprintf(cfg->Video_Encode[0].m_StreamName, sizeof(cfg->Video_Encode[0].m_StreamName), "main-0");
+    snprintf(cfg->Video_Encode[0].m_EncodeType, sizeof(cfg->Video_Encode[0].m_EncodeType), "H.264");
+    cfg->Video_Encode[0].m_Enable = 1;
+    cfg->Video_Encode[0].m_FPS = 25;
+    cfg->Video_Encode[0].m_GOP = 60;
+
     return 0;
 }
 
+static int kvs_request_temporary_credentials_placeholder(PCHAR *accessKey, PCHAR *secretKey, PCHAR *sessionToken)
+{
+    PCHAR credEndpoint = getenv("KVS_TEMP_CREDENTIAL_ENDPOINT");
+
+    if (credEndpoint != NULL)
+    {
+        fii_log_warnning("Temporary credential endpoint configured (%s) but backend exchange is not implemented in kvs_server yet.", credEndpoint);
+    }
+
+    *accessKey = NULL;
+    *secretKey = NULL;
+    *sessionToken = NULL;
+    return -1;
+}
+
+static int kvs_build_event_stream_name(const char *event_filename, char *stream_name, size_t stream_name_len)
+{
+    size_t i = 0;
+    size_t offset = 0;
+    const char *filename = event_filename == NULL ? "unknown" : event_filename;
+    time_t now = time(NULL);
+
+    if (stream_name == NULL || stream_name_len == 0)
+    {
+        return -1;
+    }
+
+    offset = snprintf(stream_name, stream_name_len, "event-");
+    if (offset >= stream_name_len)
+    {
+        return -1;
+    }
+
+    for (i = 0; filename[i] != '\0' && offset + 1 < stream_name_len; i++)
+    {
+        char c = filename[i];
+        if ((c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' || c == '_')
+        {
+            stream_name[offset++] = c;
+        }
+        else
+        {
+            stream_name[offset++] = '-';
+        }
+    }
+
+    if (offset + 24 >= stream_name_len)
+    {
+        return -1;
+    }
+
+    snprintf(stream_name + offset, stream_name_len - offset, "-%llu-%ld", g_kvs_event_seq++, (long) now);
+    return 0;
+}
+
+static int kvs_copy_frame_payload(const FrameData_t *frame_data, PBYTE *frame_buffer, UINT32 *frame_size, BOOL *allocated)
+{
+    int merged_size = 0;
+    PBYTE merged = NULL;
+
+    if (frame_data == NULL || frame_buffer == NULL || frame_size == NULL || allocated == NULL)
+    {
+        return -1;
+    }
+
+    *allocated = FALSE;
+    *frame_buffer = NULL;
+    *frame_size = 0;
+
+    if (frame_data->FrameSize <= 0 || frame_data->FramePtr == NULL)
+    {
+        return -1;
+    }
+
+    if (frame_data->FrameSize1 > 0 && frame_data->FramePtr1 != NULL)
+    {
+        merged_size = frame_data->FrameSize + frame_data->FrameSize1;
+        merged = (PBYTE) MEMALLOC((UINT32) merged_size);
+        if (merged == NULL)
+        {
+            return -1;
+        }
+
+        MEMCPY(merged, frame_data->FramePtr, frame_data->FrameSize);
+        MEMCPY(merged + frame_data->FrameSize, frame_data->FramePtr1, frame_data->FrameSize1);
+
+        *allocated = TRUE;
+        *frame_buffer = merged;
+        *frame_size = (UINT32) merged_size;
+        return 0;
+    }
+
+    *frame_buffer = (PBYTE) frame_data->FramePtr;
+    *frame_size = (UINT32) frame_data->FrameSize;
+    return 0;
+}
+
+static STATUS kvs_put_video_frame(STREAM_HANDLE stream_handle, int *video_index, UINT64 presentation_ts, BOOL *first_video_sent)
+{
+    STATUS status = STATUS_SUCCESS;
+    Frame video_frame;
+    FrameData_t ring_frame;
+    PBYTE frame_buffer = NULL;
+    UINT32 frame_size = 0;
+    BOOL allocated = FALSE;
+    int ret = -1;
+
+    if (video_index == NULL || first_video_sent == NULL)
+    {
+        return STATUS_NULL_ARG;
+    }
+
+    MEMSET(&ring_frame, 0x0, SIZEOF(FrameData_t));
+    ret = get_video_frame_data(0, video_index, &ring_frame);
+    if (ret < 0)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    if (kvs_copy_frame_payload(&ring_frame, &frame_buffer, &frame_size, &allocated) < 0)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    MEMSET(&video_frame, 0x0, SIZEOF(Frame));
+    video_frame.version = FRAME_CURRENT_VERSION;
+    video_frame.trackId = DEFAULT_VIDEO_TRACK_ID;
+    video_frame.duration = 0;
+    video_frame.decodingTs = presentation_ts;
+    video_frame.presentationTs = presentation_ts;
+    video_frame.frameData = frame_buffer;
+    video_frame.size = frame_size;
+    video_frame.flags = (ring_frame.FrameType != 0) ? FRAME_FLAG_KEY_FRAME : FRAME_FLAG_NONE;
+
+    status = putKinesisVideoFrame(stream_handle, &video_frame);
+    if (STATUS_SUCCEEDED(status))
+    {
+        *first_video_sent = TRUE;
+    }
+
+    if (allocated)
+    {
+        MEMFREE(frame_buffer);
+    }
+
+    return status;
+}
+
+static STATUS kvs_put_audio_frame(STREAM_HANDLE stream_handle, MapInfo_t *audio_stream, int *audio_index, UINT64 presentation_ts, BOOL first_video_sent)
+{
+    STATUS status = STATUS_SUCCESS;
+    Frame audio_frame;
+    FrameData_t ring_frame;
+    PBYTE frame_buffer = NULL;
+    UINT32 frame_size = 0;
+    BOOL allocated = FALSE;
+    int ret = -1;
+
+    if (audio_stream == NULL || audio_index == NULL || !first_video_sent)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    MEMSET(&ring_frame, 0x0, SIZEOF(FrameData_t));
+    ret = get_audio_frame_data(audio_stream, audio_index, &ring_frame);
+    if (ret < 0)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    if (kvs_copy_frame_payload(&ring_frame, &frame_buffer, &frame_size, &allocated) < 0)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    MEMSET(&audio_frame, 0x0, SIZEOF(Frame));
+    audio_frame.version = FRAME_CURRENT_VERSION;
+    audio_frame.trackId = DEFAULT_AUDIO_TRACK_ID;
+    audio_frame.duration = 0;
+    audio_frame.decodingTs = presentation_ts;
+    audio_frame.presentationTs = presentation_ts;
+    audio_frame.frameData = frame_buffer;
+    audio_frame.size = frame_size;
+    audio_frame.flags = FRAME_FLAG_NONE;
+
+    status = putKinesisVideoFrame(stream_handle, &audio_frame);
+
+    if (allocated)
+    {
+        MEMFREE(frame_buffer);
+    }
+
+    return status;
+}
+
+static int kvs_upload_event_stream(const char *event_filename)
+{
+    STATUS status = STATUS_SUCCESS;
+    PDeviceInfo device_info = NULL;
+    PStreamInfo stream_info = NULL;
+    PClientCallbacks client_callbacks = NULL;
+    PStreamCallbacks stream_callbacks = NULL;
+    CLIENT_HANDLE client_handle = INVALID_CLIENT_HANDLE_VALUE;
+    STREAM_HANDLE stream_handle = INVALID_STREAM_HANDLE_VALUE;
+    PCHAR access_key = NULL;
+    PCHAR secret_key = NULL;
+    PCHAR session_token = NULL;
+    PCHAR region = NULL;
+    PCHAR ca_cert_path = NULL;
+    PCHAR client_cert_path = NULL;
+    PCHAR client_key_path = NULL;
+    CHAR endpoint_override[MAX_URI_CHAR_LEN];
+    char stream_name[KVS_STREAM_NAME_MAX_LEN] = {0};
+    UINT64 start_time = 0;
+    UINT64 now_time = 0;
+    UINT64 elapsed = 0;
+    int video_index = 0;
+    int audio_index = 0;
+    BOOL first_video_sent = FALSE;
+    MapInfo_t *audio_stream = NULL;
+
+    if (kvs_build_event_stream_name(event_filename, stream_name, sizeof(stream_name)) < 0)
+    {
+        fii_log_error("invalid event filename for stream generation.\n");
+        return -1;
+    }
+
+    access_key = getenv("AWS_ACCESS_KEY_ID");
+    secret_key = getenv("AWS_SECRET_ACCESS_KEY");
+    session_token = getenv("AWS_SESSION_TOKEN");
+    if (access_key == NULL || secret_key == NULL)
+    {
+        if (kvs_request_temporary_credentials_placeholder(&access_key, &secret_key, &session_token) < 0)
+        {
+            fii_log_error("missing AWS credentials. set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or implement KVS_TEMP_CREDENTIAL_ENDPOINT backend exchange.\n");
+            return -1;
+        }
+    }
+
+    region = getenv("AWS_REGION");
+    if (region == NULL)
+    {
+        region = (PCHAR) KVS_DEFAULT_REGION;
+    }
+
+    ca_cert_path = getenv("KVS_CA_CERT_PATH");
+    client_cert_path = getenv("KVS_CLIENT_CERT_PATH");
+    client_key_path = getenv("KVS_CLIENT_KEY_PATH");
+
+    fii_log_info("upload event stream: %s\n", stream_name);
+    if (client_cert_path != NULL || client_key_path != NULL)
+    {
+        fii_log_warnning("KVS_CLIENT_CERT_PATH/KVS_CLIENT_KEY_PATH are configured; aws-key credential flow ignores client cert/key unless custom callback provider is implemented.\n");
+    }
+
+    MEMSET(endpoint_override, 0x0, SIZEOF(endpoint_override));
+    getEndpointOverride(endpoint_override, SIZEOF(endpoint_override));
+
+    CHK_STATUS(createDefaultDeviceInfo(&device_info));
+    device_info->clientInfo.loggerLogLevel = getSampleLogLevel();
+
+    CHK_STATUS(createRealtimeAudioVideoStreamInfoProvider(stream_name, KVS_DEFAULT_RETENTION_PERIOD, KVS_DEFAULT_BUFFER_DURATION, &stream_info));
+    stream_info->streamCaps.absoluteFragmentTimes = FALSE;
+
+    CHK_STATUS(createDefaultCallbacksProviderWithAwsCredentialsAndEndpointOverride(access_key,
+                                                                                   secret_key,
+                                                                                   session_token,
+                                                                                   MAX_UINT64,
+                                                                                   region,
+                                                                                   ca_cert_path,
+                                                                                   NULL,
+                                                                                   NULL,
+                                                                                   endpoint_override,
+                                                                                   &client_callbacks));
+
+    CHK_STATUS(createStreamCallbacks(&stream_callbacks));
+    CHK_STATUS(addStreamCallbacks(client_callbacks, stream_callbacks));
+    CHK_STATUS(createKinesisVideoClient(device_info, client_callbacks, &client_handle));
+    CHK_STATUS(createKinesisVideoStreamSync(client_handle, stream_info, &stream_handle));
+
+    start_time = GETTIME();
+    while (kvs_service_get_status() == KVS_SERVICE_STATUS_OK)
+    {
+        now_time = GETTIME();
+        elapsed = now_time - start_time;
+        if (elapsed >= KVS_EVENT_UPLOAD_DURATION)
+        {
+            break;
+        }
+
+        if (STATUS_FAILED(kvs_put_video_frame(stream_handle, &video_index, elapsed, &first_video_sent)))
+        {
+            fii_log_warnning("put video frame failed.\n");
+        }
+
+        audio_stream = rtp_get_audio_stream();
+        if (STATUS_FAILED(kvs_put_audio_frame(stream_handle, audio_stream, &audio_index, elapsed, first_video_sent)))
+        {
+            fii_log_warnning("put audio frame failed.\n");
+        }
+
+        THREAD_SLEEP(10 * HUNDREDS_OF_NANOS_IN_A_MILLISECOND);
+    }
+
+    CHK_STATUS(stopKinesisVideoStreamSync(stream_handle));
+
+CleanUp:
+
+    if (STATUS_FAILED(status))
+    {
+        fii_log_error("event upload failed with status 0x%08x\n", status);
+    }
+
+    freeKinesisVideoStream(&stream_handle);
+    freeKinesisVideoClient(&client_handle);
+    freeCallbacksProvider(&client_callbacks);
+    freeStreamInfoProvider(&stream_info);
+    freeDeviceInfo(&device_info);
+
+    return STATUS_SUCCEEDED(status) ? 0 : -1;
+}
 
 int kvs_media_init(void)
 {
@@ -221,7 +561,7 @@ int kvs_media_deinit(void)
         fii_log_error("failed to close_stream\n");
         return -1;
     }
-    
+
     fii_log_info("close_stream success!\n");
     return 0;
 }
@@ -238,6 +578,8 @@ static void *kvs_service_proc(void *exit_flag)
 	fii_log_normal("kvs_service_proc start!\n");
 	bool *kvs_exit_flag = exit_flag;
     int ret = -1;
+    char event_filename[COMMON_STRING_LEN] = {0};
+    int wait_ret = 0;
 
 	ret = kvs_service_cfg_get(&g_kvs_service_cfg);
 	if(ret < 0)
@@ -257,22 +599,42 @@ static void *kvs_service_proc(void *exit_flag)
 		{
 			fii_log_info("kvs media init failed 1\n");
         	kvs_service_set_status(KVS_SERVICE_STATUS_ERR);
-        	return NULL;	
+        	return NULL;
 		}
 
     }
-	
-    //
 
 	while(!(*kvs_exit_flag))
 	{
-		
+        pthread_mutex_lock(&g_kvs_event_mutex);
+        while (!g_kvs_event_pending && !(*kvs_exit_flag))
+        {
+            wait_ret = pthread_cond_wait(&g_kvs_event_cond, &g_kvs_event_mutex);
+            if (wait_ret != 0)
+            {
+                fii_log_warnning("kvs_service_proc wakeup failed: %d\n", wait_ret);
+                break;
+            }
+        }
 
+        if (*kvs_exit_flag)
+        {
+            pthread_mutex_unlock(&g_kvs_event_mutex);
+            break;
+        }
+
+        strncpy(event_filename, g_kvs_event_filename, sizeof(event_filename) - 1);
+        g_kvs_event_pending = false;
+        pthread_mutex_unlock(&g_kvs_event_mutex);
+
+        if (kvs_upload_event_stream(event_filename) < 0)
+        {
+            fii_log_error("event upload failed for %s\n", event_filename);
+        }
 	}
 
-	
 	pthread_exit(NULL);
-	
+
 	return NULL;
 }
 
@@ -315,6 +677,9 @@ int kvs_service_stop(void)
 	if (kvs_pthread_id != 0)
 	{
 	    g_kvs_exit = true;
+        pthread_mutex_lock(&g_kvs_event_mutex);
+        pthread_cond_signal(&g_kvs_event_cond);
+        pthread_mutex_unlock(&g_kvs_event_mutex);
 		pthread_join(kvs_pthread_id, NULL);
 		kvs_pthread_id = 0;
 	}
@@ -326,6 +691,23 @@ int kvs_service_stop(void)
 	return 0;
 }
 
+int kvs_service_trigger_event(const char *event_filename)
+{
+    if (event_filename == NULL)
+    {
+        return -1;
+    }
+
+    pthread_mutex_lock(&g_kvs_event_mutex);
+    strncpy(g_kvs_event_filename, event_filename, sizeof(g_kvs_event_filename) - 1);
+    g_kvs_event_filename[sizeof(g_kvs_event_filename) - 1] = '\0';
+    g_kvs_event_pending = true;
+    pthread_cond_signal(&g_kvs_event_cond);
+    pthread_mutex_unlock(&g_kvs_event_mutex);
+
+    return 0;
+}
+
 /**
  * @description: Initializes the KVS server system
  * @return {int} Always returns 0
@@ -335,7 +717,6 @@ int kvs_init(void)
 {
 	fii_log_normal("kvs_init!\n");
 	init_signals();
-	kvs_msg_start();
 	kvs_service_start();
 	return 0;
 }
@@ -348,9 +729,8 @@ int kvs_init(void)
 int kvs_exit(void)
 {
 	fii_log_normal("kvs_exit!\n");
-	kvs_msg_thread_stop();
 	kvs_service_stop();
 	kvs_media_deinit();
-	
+
 	return 0;
 }

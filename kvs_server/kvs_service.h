@@ -45,4 +45,14 @@ int kvs_service_get_status(void);
 
 void kvs_service_set_status(int status);
 
+int kvs_service_start(void);
+
+int kvs_service_stop(void);
+
+int kvs_init(void);
+
+int kvs_exit(void);
+
+int kvs_service_trigger_event(const char *event_filename);
+
 #endif // KVS_SERVICE_H 
