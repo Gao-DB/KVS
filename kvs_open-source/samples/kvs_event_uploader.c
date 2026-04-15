@@ -17,6 +17,8 @@
 #define FRAME_READ_SIZE 4096
 #define VIDEO_FRAME_INTERVAL_MS 40
 #define AUDIO_FRAME_INTERVAL_MS 20
+#define MAX_ENV_INTERVAL_SEC 86400
+#define KEY_FRAME_INTERVAL 25
 
 static volatile sig_atomic_t g_stop = 0;
 
@@ -49,7 +51,7 @@ static int parse_env_int(const char* envName, int defaultVal)
         return defaultVal;
     }
     parsed = strtol(raw, &endPtr, 10);
-    if (*endPtr != '\0' || parsed <= 0 || parsed > 86400) {
+    if (*endPtr != '\0' || parsed <= 0 || parsed > MAX_ENV_INTERVAL_SEC) {
         return defaultVal;
     }
     return (int) parsed;
@@ -127,9 +129,9 @@ static int upload_event_window(KvsProducerClient* client, AppConfig* app)
     uint64_t stopMs = startMs + ((uint64_t) app->uploadDurationSec * 1000ULL);
     uint64_t nextVideoMs = startMs;
     uint64_t nextAudioMs = startMs;
-    static uint64_t eventId = 0;
+    uint64_t eventId = startMs;
+    uint64_t videoFrameIndex = 0;
 
-    eventId++;
     snprintf(streamName, sizeof(streamName), "event-%llu", (unsigned long long) eventId);
 
     ret = kvsProducerCreateStream(client, streamName, &stream);
@@ -158,9 +160,10 @@ static int upload_event_window(KvsProducerClient* client, AppConfig* app)
                 videoFrame.data = app->video.buffer;
                 videoFrame.size = bytes;
                 videoFrame.ptsMs = ts;
-                videoFrame.isKeyFrame = 1;
+                videoFrame.isKeyFrame = (videoFrameIndex % KEY_FRAME_INTERVAL) == 0 ? 1 : 0;
                 videoFrame.isAudio = 0;
                 kvsProducerPutFrame(stream, &videoFrame);
+                videoFrameIndex++;
             }
             nextVideoMs += VIDEO_FRAME_INTERVAL_MS;
         }
