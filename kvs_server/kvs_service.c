@@ -15,10 +15,113 @@
 #include <signal.h>
 #include <ucontext.h>
 #include <stdint.h>
+#include <inttypes.h>
+#include <time.h>
 #include <netinet/in.h>
 
 #include "kvs_service.h"
 #include "kvs_msg.h"
+#include "kvs_media.h"
+#include "../kvs_open-source/minimal_sdk/kvs_producer_minimal.h"
+
+#define KVS_DEFAULT_EVENT_INTERVAL_MS      (3000ULL)
+#define KVS_DEFAULT_EVENT_DURATION_MS      (10000ULL)
+#define KVS_DEFAULT_FRAME_LOOP_IDLE_US     (10 * 1000)
+
+typedef struct {
+    const char* region;
+    const char* access_key_id;
+    const char* secret_access_key;
+    const char* session_token;
+    const char* cert_path;
+    const char* private_key_path;
+    const char* ca_cert_path;
+    const char* stream_prefix;
+    uint64_t event_interval_ms;
+    uint64_t event_duration_ms;
+} kvs_uplink_env_t;
+
+static uint64_t kvs_now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (uint64_t) ts.tv_sec * 1000ULL + (uint64_t) ts.tv_nsec / 1000000ULL;
+}
+
+static uint64_t kvs_ms_to_100ns(uint64_t ms)
+{
+    return ms * 10000ULL;
+}
+
+static uint64_t kvs_get_env_u64(const char* name, uint64_t default_value)
+{
+    const char* value = getenv(name);
+    if (value == NULL || *value == '\0') {
+        return default_value;
+    }
+
+    char* end_ptr = NULL;
+    uint64_t parsed = strtoull(value, &end_ptr, 10);
+    if (end_ptr == value || (end_ptr != NULL && *end_ptr != '\0')) {
+        return default_value;
+    }
+
+    return parsed;
+}
+
+static int kvs_load_uplink_env(kvs_uplink_env_t* env)
+{
+    if (env == NULL) {
+        return -1;
+    }
+
+    memset(env, 0x0, sizeof(*env));
+
+    env->region = getenv("AWS_REGION");
+    env->access_key_id = getenv("AWS_ACCESS_KEY_ID");
+    env->secret_access_key = getenv("AWS_SECRET_ACCESS_KEY");
+    env->session_token = getenv("AWS_SESSION_TOKEN");
+    env->cert_path = getenv("KVS_CERT_PATH");
+    env->private_key_path = getenv("KVS_PRIVATE_KEY_PATH");
+    env->ca_cert_path = getenv("KVS_CA_CERT_PATH");
+    env->stream_prefix = getenv("KVS_STREAM_PREFIX");
+    env->event_interval_ms = kvs_get_env_u64("KVS_EVENT_INTERVAL_MS", KVS_DEFAULT_EVENT_INTERVAL_MS);
+    env->event_duration_ms = kvs_get_env_u64("KVS_EVENT_DURATION_MS", KVS_DEFAULT_EVENT_DURATION_MS);
+
+    if (env->region == NULL || env->access_key_id == NULL || env->secret_access_key == NULL) {
+        /*
+         * 设备端上行必须提供以下环境变量：
+         * 1) AWS_REGION
+         * 2) AWS_ACCESS_KEY_ID
+         * 3) AWS_SECRET_ACCESS_KEY
+         * 4) AWS_SESSION_TOKEN (可选，推荐使用短期凭证时提供)
+         * 5) KVS_CERT_PATH (可选，客户端证书路径)
+         * 6) KVS_PRIVATE_KEY_PATH (可选，客户端私钥路径)
+         * 7) KVS_CA_CERT_PATH (可选，CA 证书路径)
+         * 8) KVS_STREAM_PREFIX (可选，默认 event)
+         * 9) KVS_EVENT_INTERVAL_MS / KVS_EVENT_DURATION_MS (可选，事件模拟参数)
+         */
+        fii_log_error("Missing mandatory AWS env vars. Required: AWS_REGION/AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY\n");
+        return -1;
+    }
+
+    if (env->stream_prefix == NULL || env->stream_prefix[0] == '\0') {
+        env->stream_prefix = "event";
+    }
+
+    return 0;
+}
+
+static int kvs_generate_event_stream_name(const kvs_uplink_env_t* env, uint64_t seq, char* out_name, size_t out_size)
+{
+    if (env == NULL || out_name == NULL || out_size == 0) {
+        return -1;
+    }
+
+    uint64_t now_ms = kvs_now_ms();
+    int written = snprintf(out_name, out_size, "%s-%" PRIu64 "-%" PRIu64, env->stream_prefix, now_ms, seq);
+    return (written > 0 && (size_t) written < out_size) ? 0 : -1;
+}
 
 static pthread_t kvs_pthread_id = 0;
 static bool g_kvs_exit = false;
@@ -238,6 +341,16 @@ static void *kvs_service_proc(void *exit_flag)
 	fii_log_normal("kvs_service_proc start!\n");
 	bool *kvs_exit_flag = exit_flag;
     int ret = -1;
+    int video_read_index = 0;
+    int audio_read_index = 0;
+    uint64_t event_seq = 0;
+    uint64_t next_event_trigger_ms = 0;
+    uint64_t current_event_stop_ms = 0;
+    bool event_active = false;
+    char stream_name[COMMON_STRING_LEN] = {0};
+    kvs_uplink_env_t uplink_env;
+    kvs_minimal_producer_config_t producer_cfg;
+    kvs_minimal_producer_t producer;
 
 	ret = kvs_service_cfg_get(&g_kvs_service_cfg);
 	if(ret < 0)
@@ -262,14 +375,77 @@ static void *kvs_service_proc(void *exit_flag)
 
     }
 	
-    //
+    if (kvs_load_uplink_env(&uplink_env) != 0) {
+        kvs_service_set_status(KVS_SERVICE_STATUS_ERR);
+        return NULL;
+    }
+
+    memset(&producer_cfg, 0x0, sizeof(producer_cfg));
+    producer_cfg.region = uplink_env.region;
+    producer_cfg.access_key_id = uplink_env.access_key_id;
+    producer_cfg.secret_access_key = uplink_env.secret_access_key;
+    producer_cfg.session_token = uplink_env.session_token;
+    producer_cfg.cert_path = uplink_env.cert_path;
+    producer_cfg.private_key_path = uplink_env.private_key_path;
+    producer_cfg.ca_cert_path = uplink_env.ca_cert_path;
+
+    if (kvs_minimal_producer_init(&producer_cfg, &producer) != 0) {
+        fii_log_error("kvs_minimal_producer_init failed\n");
+        kvs_service_set_status(KVS_SERVICE_STATUS_ERR);
+        return NULL;
+    }
+
+    next_event_trigger_ms = kvs_now_ms();
 
 	while(!(*kvs_exit_flag))
 	{
-		
+		uint64_t now_ms = kvs_now_ms();
 
+        if (!event_active && now_ms >= next_event_trigger_ms) {
+            if (kvs_generate_event_stream_name(&uplink_env, ++event_seq, stream_name, sizeof(stream_name)) == 0) {
+                if (kvs_minimal_producer_create_stream(&producer, stream_name) == 0) {
+                    event_active = true;
+                    current_event_stop_ms = now_ms + uplink_env.event_duration_ms;
+                    fii_log_info("CreateStream success, stream=%s\n", stream_name);
+                }
+            }
+            next_event_trigger_ms = now_ms + uplink_env.event_interval_ms;
+        }
+
+        if (event_active) {
+            FrameData_t video_frame;
+            FrameData_t audio_frame;
+            memset(&video_frame, 0x0, sizeof(video_frame));
+            memset(&audio_frame, 0x0, sizeof(audio_frame));
+
+            /*
+             * 帧获取接口（由 ringbuf 外部实现提供）：
+             * 1) int get_video_frame_data(int stream_id, int* index, FrameData_t* Frame)
+             * 2) int get_audio_frame_data(MapInfo_t* map_info, int* index, FrameData_t* Frame)
+             * 返回值 < 0 表示暂时无帧/读取失败；FrameData_t 中由外部实现填充帧数据与时间戳。
+             */
+            if (get_video_frame_data(0, &video_read_index, &video_frame) >= 0) {
+                kvs_minimal_producer_put_video_frame(&producer, &video_frame, kvs_ms_to_100ns(now_ms));
+            }
+
+            if (get_audio_frame_data(rtp_get_audio_stream(), &audio_read_index, &audio_frame) >= 0) {
+                kvs_minimal_producer_put_audio_frame(&producer, &audio_frame, kvs_ms_to_100ns(now_ms));
+            }
+
+            if (now_ms >= current_event_stop_ms || *kvs_exit_flag) {
+                kvs_minimal_producer_stop_stream(&producer);
+                event_active = false;
+                memset(stream_name, 0x0, sizeof(stream_name));
+            }
+        } else {
+            usleep(KVS_DEFAULT_FRAME_LOOP_IDLE_US);
+        }
 	}
 
+    if (event_active) {
+        kvs_minimal_producer_stop_stream(&producer);
+    }
+    kvs_minimal_producer_deinit(&producer);
 	
 	pthread_exit(NULL);
 	
