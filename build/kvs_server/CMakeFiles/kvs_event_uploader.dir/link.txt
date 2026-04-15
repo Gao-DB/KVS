@@ -1,1 +1,0 @@
-/usr/bin/cc -Wl,--dependency-file=CMakeFiles/kvs_event_uploader.dir/link.d CMakeFiles/kvs_event_uploader.dir/kvs_main.c.o CMakeFiles/kvs_event_uploader.dir/kvs_media.c.o CMakeFiles/kvs_event_uploader.dir/kvs_service.c.o CMakeFiles/kvs_event_uploader.dir/kvs_service_cfg.c.o -o kvs_event_uploader
