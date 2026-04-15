@@ -8,6 +8,8 @@
 #define STREAMING_WINDOW_MS 12000ULL
 #define VIDEO_FRAME_INTERVAL_MS 40ULL
 #define AUDIO_FRAME_INTERVAL_MS 20ULL
+#define KEY_FRAME_INTERVAL_MS 1000ULL
+#define AUDIO_FRAMES_ARE_KEY_FRAMES false
 
 static int kvs_handle_event(KvsSampleServiceContext *ctx, unsigned int event_id)
 {
@@ -19,15 +21,20 @@ static int kvs_handle_event(KvsSampleServiceContext *ctx, unsigned int event_id)
     uint64_t now_ms = 0;
     uint64_t next_video_ms = 0;
     uint64_t next_audio_ms = 0;
+    int stream_name_len = 0;
 
     memset(video_payload, 0xAB, sizeof(video_payload));
     memset(audio_payload, 0xCD, sizeof(audio_payload));
 
-    snprintf(stream_name,
-             sizeof(stream_name),
-             "event-%" PRIu64 "-%u",
-             kvs_get_time_ms(),
-             event_id);
+    stream_name_len = snprintf(stream_name,
+                               sizeof(stream_name),
+                               "event-%" PRIu64 "-%u",
+                               kvs_get_time_ms(),
+                               event_id);
+    if (stream_name_len < 0 || (size_t) stream_name_len >= sizeof(stream_name)) {
+        fprintf(stderr, "[kvs_server] stream name generation failed for event %u\n", event_id);
+        return -1;
+    }
 
     if (kvs_create_stream(ctx->client, stream_name, &stream) != 0) {
         fprintf(stderr, "[kvs_server] CreateStream failed for %s\n", stream_name);
@@ -39,12 +46,14 @@ static int kvs_handle_event(KvsSampleServiceContext *ctx, unsigned int event_id)
     next_audio_ms = start_ms;
 
     while ((now_ms = kvs_get_time_ms()) - start_ms < STREAMING_WINDOW_MS) {
+        uint64_t sleep_until_ms = next_video_ms < next_audio_ms ? next_video_ms : next_audio_ms;
+
         if (now_ms >= next_video_ms) {
             KvsMediaFrame video_frame;
             video_frame.data = video_payload;
             video_frame.size = sizeof(video_payload);
             video_frame.pts_ms = now_ms;
-            video_frame.is_key_frame = ((now_ms - start_ms) % 1000ULL) < VIDEO_FRAME_INTERVAL_MS;
+            video_frame.is_key_frame = ((now_ms - start_ms) % KEY_FRAME_INTERVAL_MS) < VIDEO_FRAME_INTERVAL_MS;
             video_frame.track_name = "video";
             if (kvs_put_media_frame(stream, &video_frame) != 0) {
                 fprintf(stderr, "[kvs_server] PutMedia(video) failed for %s\n", stream_name);
@@ -58,7 +67,7 @@ static int kvs_handle_event(KvsSampleServiceContext *ctx, unsigned int event_id)
             audio_frame.data = audio_payload;
             audio_frame.size = sizeof(audio_payload);
             audio_frame.pts_ms = now_ms;
-            audio_frame.is_key_frame = false;
+            audio_frame.is_key_frame = AUDIO_FRAMES_ARE_KEY_FRAMES;
             audio_frame.track_name = "audio";
             if (kvs_put_media_frame(stream, &audio_frame) != 0) {
                 fprintf(stderr, "[kvs_server] PutMedia(audio) failed for %s\n", stream_name);
@@ -67,10 +76,12 @@ static int kvs_handle_event(KvsSampleServiceContext *ctx, unsigned int event_id)
             next_audio_ms += AUDIO_FRAME_INTERVAL_MS;
         }
 
-        usleep(10 * 1000);
+        if (sleep_until_ms > now_ms) {
+            usleep((useconds_t) ((sleep_until_ms - now_ms) * 1000ULL));
+        }
     }
 
-    kvs_stop_stream(stream);
+    kvs_stop_stream(&stream);
     fprintf(stdout, "[kvs_server] event %u finished: stream=%s duration=%llums\n",
             event_id,
             stream_name,

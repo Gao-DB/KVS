@@ -95,14 +95,15 @@ int kvs_put_media_frame(KvsStreamHandle *stream, const KvsMediaFrame *frame)
     return 0;
 }
 
-int kvs_stop_stream(KvsStreamHandle *stream)
+int kvs_stop_stream(KvsStreamHandle **stream)
 {
-    if (stream == NULL) {
+    if (stream == NULL || *stream == NULL) {
         return -1;
     }
 
-    stream->stopped = 1;
-    free(stream);
+    (*stream)->stopped = 1;
+    free(*stream);
+    *stream = NULL;
     return 0;
 }
 

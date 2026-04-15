@@ -7,6 +7,7 @@
 #include "kvs_producer_sdk.h"
 
 #define KVS_STREAM_NAME_MAX_LEN 128
+#define KVS_TRACK_NAME_MAX_LEN 64
 #define KVS_PAYLOAD_MAX_LEN 512
 
 int kvs_client_validate_config(const KvsProducerConfig *config);

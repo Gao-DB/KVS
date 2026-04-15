@@ -32,7 +32,7 @@ void kvs_producer_client_free(KvsProducerClient *client);
 
 int kvs_create_stream(KvsProducerClient *client, const char *stream_name, KvsStreamHandle **stream);
 int kvs_put_media_frame(KvsStreamHandle *stream, const KvsMediaFrame *frame);
-int kvs_stop_stream(KvsStreamHandle *stream);
+int kvs_stop_stream(KvsStreamHandle **stream);
 
 uint64_t kvs_get_time_ms(void);
 

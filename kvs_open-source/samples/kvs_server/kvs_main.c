@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -7,9 +8,14 @@
 static unsigned int parse_arg(const char *value, unsigned int default_value)
 {
     char *end_ptr = NULL;
-    unsigned long parsed = strtoul(value, &end_ptr, 10);
+    unsigned long parsed = 0;
 
-    if (value == NULL || *value == '\0' || end_ptr == value || *end_ptr != '\0') {
+    if (value == NULL || *value == '\0') {
+        return default_value;
+    }
+
+    parsed = strtoul(value, &end_ptr, 10);
+    if (end_ptr == value || *end_ptr != '\0' || parsed > UINT_MAX) {
         return default_value;
     }
 
