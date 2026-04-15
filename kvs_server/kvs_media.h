@@ -1,29 +1,21 @@
-#ifndef __KVS_MEDIA_H_
-#define __KVS_MEDIA_H_
-#ifdef __cplusplus
- extern "C" {
+#ifndef KVS_MEDIA_H
+#define KVS_MEDIA_H
+
+#include <stdint.h>
+
+/* External ringbuf interfaces provided by upper layer. */
+int get_video_frame_data(uint8_t **data, int *len, uint64_t *pts);
+int get_audio_frame_data(uint8_t **data, int *len, uint64_t *pts);
+
+typedef struct {
+    uint8_t* data;
+    int len;
+    uint64_t pts;
+} kvs_media_frame_t;
+
+int kvs_media_init(void);
+int kvs_media_deinit(void);
+int kvs_media_get_video_frame(kvs_media_frame_t* frame);
+int kvs_media_get_audio_frame(kvs_media_frame_t* frame);
+
 #endif
-
-#include "ringbuf.h"
-
-#define FMTP_MAX_SIZE 		400
-#define FRAME_BUFF_MAX_SIZE	512*1024
-
-MapInfo_t* rtp_get_video_stream0(void);
-
-MapInfo_t* rtp_get_video_stream1(void);
-
-MapInfo_t* rtp_get_audio_stream(void);
-
-int open_video_stream(int streamerNum);
-int open_audio_stream(void);
-int close_stream(void);
-int get_video_frame_data(int stream_id, int* index, FrameData_t* Frame);
-int get_audio_frame_data(MapInfo_t *map_info,int* index, FrameData_t* Frame);
-int open_local_file(const char* filePath);
-#ifdef __cplusplus
-	}
-#endif
-
-
-#endif // !__KVS_MEDIA_H_
