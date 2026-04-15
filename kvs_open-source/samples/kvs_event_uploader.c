@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -85,7 +86,9 @@ static size_t ring_read_chunk(RingFile* ring)
     bytesRead = fread(ring->buffer, 1, sizeof(ring->buffer), ring->fp);
     if (bytesRead == 0) {
         clearerr(ring->fp);
-        fseek(ring->fp, 0, SEEK_SET);
+        if (fseek(ring->fp, 0, SEEK_SET) != 0) {
+            return 0;
+        }
         bytesRead = fread(ring->buffer, 1, sizeof(ring->buffer), ring->fp);
     }
     return bytesRead;
@@ -186,7 +189,11 @@ static int upload_event_window(KvsProducerClient* client, AppConfig* app)
             uint64_t now = now_ms();
             if (nextDeadlineMs > now) {
                 uint64_t sleepMs = nextDeadlineMs - now;
-                usleep((useconds_t) (sleepMs * 1000));
+                uint64_t sleepUs = sleepMs * 1000ULL;
+                if (sleepUs > (uint64_t) UINT_MAX) {
+                    sleepUs = (uint64_t) UINT_MAX;
+                }
+                usleep((useconds_t) sleepUs);
             } else {
                 usleep(1000);
             }
