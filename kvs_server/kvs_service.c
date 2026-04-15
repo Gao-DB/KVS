@@ -41,6 +41,16 @@ typedef struct {
     uint64_t event_duration_ms;
 } kvs_uplink_env_t;
 
+/*
+ * Platform can provide a strong symbol implementation to extract timestamp from FrameData_t.
+ * Return value must be in 100ns units. Returning 0 means "timestamp unavailable".
+ */
+__attribute__((weak)) uint64_t kvs_extract_frame_timestamp_100ns(const FrameData_t* frame)
+{
+    (void) frame;
+    return 0;
+}
+
 static uint64_t kvs_now_ms(void)
 {
     struct timespec ts;
@@ -90,16 +100,16 @@ static int kvs_load_uplink_env(kvs_uplink_env_t* env)
 
     if (env->region == NULL || env->access_key_id == NULL || env->secret_access_key == NULL) {
         /*
-         * 设备端上行必须提供以下环境变量：
+         * Required env vars for device uplink:
          * 1) AWS_REGION
          * 2) AWS_ACCESS_KEY_ID
          * 3) AWS_SECRET_ACCESS_KEY
-         * 4) AWS_SESSION_TOKEN (可选，推荐使用短期凭证时提供)
-         * 5) KVS_CERT_PATH (可选，客户端证书路径)
-         * 6) KVS_PRIVATE_KEY_PATH (可选，客户端私钥路径)
-         * 7) KVS_CA_CERT_PATH (可选，CA 证书路径)
-         * 8) KVS_STREAM_PREFIX (可选，默认 event)
-         * 9) KVS_EVENT_INTERVAL_MS / KVS_EVENT_DURATION_MS (可选，事件模拟参数)
+         * 4) AWS_SESSION_TOKEN (optional, recommended for temporary credentials)
+         * 5) KVS_CERT_PATH (optional, client certificate path)
+         * 6) KVS_PRIVATE_KEY_PATH (optional, client private key path)
+         * 7) KVS_CA_CERT_PATH (optional, CA certificate path)
+         * 8) KVS_STREAM_PREFIX (optional, default "event")
+         * 9) KVS_EVENT_INTERVAL_MS / KVS_EVENT_DURATION_MS (optional event simulation settings)
          */
         fii_log_error("Missing mandatory AWS env vars. Required: AWS_REGION/AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY\n");
         return -1;
@@ -419,17 +429,26 @@ static void *kvs_service_proc(void *exit_flag)
             memset(&audio_frame, 0x0, sizeof(audio_frame));
 
             /*
-             * 帧获取接口（由 ringbuf 外部实现提供）：
+             * Frame acquisition APIs (provided by external ringbuf implementation):
              * 1) int get_video_frame_data(int stream_id, int* index, FrameData_t* Frame)
              * 2) int get_audio_frame_data(MapInfo_t* map_info, int* index, FrameData_t* Frame)
-             * 返回值 < 0 表示暂时无帧/读取失败；FrameData_t 中由外部实现填充帧数据与时间戳。
+             * Return value < 0 means no frame/read failure.
+             * External frame provider should populate frame payload and timestamp.
              */
             if (get_video_frame_data(0, &video_read_index, &video_frame) >= 0) {
-                kvs_minimal_producer_put_video_frame(&producer, &video_frame, kvs_ms_to_100ns(now_ms));
+                uint64_t frame_ts_100ns = kvs_extract_frame_timestamp_100ns(&video_frame);
+                if (frame_ts_100ns == 0) {
+                    frame_ts_100ns = kvs_ms_to_100ns(now_ms);
+                }
+                kvs_minimal_producer_put_video_frame(&producer, &video_frame, frame_ts_100ns);
             }
 
             if (get_audio_frame_data(rtp_get_audio_stream(), &audio_read_index, &audio_frame) >= 0) {
-                kvs_minimal_producer_put_audio_frame(&producer, &audio_frame, kvs_ms_to_100ns(now_ms));
+                uint64_t frame_ts_100ns = kvs_extract_frame_timestamp_100ns(&audio_frame);
+                if (frame_ts_100ns == 0) {
+                    frame_ts_100ns = kvs_ms_to_100ns(now_ms);
+                }
+                kvs_minimal_producer_put_audio_frame(&producer, &audio_frame, frame_ts_100ns);
             }
 
             if (now_ms >= current_event_stop_ms || *kvs_exit_flag) {
