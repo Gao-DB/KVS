@@ -18,7 +18,6 @@
 #define VIDEO_FRAME_INTERVAL_MS 40
 #define AUDIO_FRAME_INTERVAL_MS 20
 #define MAX_ENV_INTERVAL_SEC 86400
-#define KEY_FRAME_INTERVAL 25
 
 static volatile sig_atomic_t g_stop = 0;
 
@@ -132,7 +131,6 @@ static int upload_event_window(KvsProducerClient* client, AppConfig* app)
     uint64_t nextVideoMs = startMs;
     uint64_t nextAudioMs = startMs;
     uint64_t eventId = startMs;
-    uint64_t videoFrameIndex = 0;
 
     snprintf(streamName, sizeof(streamName), "event-%llu", (unsigned long long) eventId);
 
@@ -162,10 +160,9 @@ static int upload_event_window(KvsProducerClient* client, AppConfig* app)
                 videoFrame.data = app->video.buffer;
                 videoFrame.size = bytes;
                 videoFrame.ptsMs = ts;
-                videoFrame.isKeyFrame = (videoFrameIndex % KEY_FRAME_INTERVAL) == 0;
+                videoFrame.isKeyFrame = 0;
                 videoFrame.isAudio = 0;
                 kvsProducerPutFrame(stream, &videoFrame);
-                videoFrameIndex++;
             }
             nextVideoMs += VIDEO_FRAME_INTERVAL_MS;
         }
@@ -183,19 +180,17 @@ static int upload_event_window(KvsProducerClient* client, AppConfig* app)
             }
             nextAudioMs += AUDIO_FRAME_INTERVAL_MS;
         }
-        {
-            uint64_t earliestFrameMs = nextVideoMs < nextAudioMs ? nextVideoMs : nextAudioMs;
-            uint64_t now = now_ms();
-            if (earliestFrameMs > now) {
-                uint64_t sleepMs = earliestFrameMs - now;
-                uint64_t sleepUs = sleepMs * 1000ULL;
-                if (sleepUs > 1000000ULL) {
-                    sleepUs = 1000000ULL;
-                }
-                usleep((useconds_t) sleepUs);
-            } else {
-                usleep(1000);
+        uint64_t earliestFrameMs = nextVideoMs < nextAudioMs ? nextVideoMs : nextAudioMs;
+        uint64_t now = now_ms();
+        if (earliestFrameMs > now) {
+            uint64_t sleepMs = earliestFrameMs - now;
+            uint64_t sleepUs = sleepMs * 1000ULL;
+            if (sleepUs > 1000000ULL) {
+                sleepUs = 1000000ULL;
             }
+            usleep((useconds_t) sleepUs);
+        } else {
+            usleep(1000);
         }
     }
 
@@ -230,6 +225,14 @@ int main(void)
     }
     if (ring_open(&app.audio, DEFAULT_RING_AUDIO_PATH) != 0) {
         fprintf(stderr, "warning: unable to open audio ring buffer %s: %s\n", DEFAULT_RING_AUDIO_PATH, strerror(errno));
+    }
+    if (app.video.fp == NULL && app.audio.fp == NULL) {
+        fprintf(stderr, "no ring buffer sources available, exiting\n");
+        ring_close(&app.video);
+        ring_close(&app.audio);
+        kvsProducerClientFree(client);
+        kvsSdkDeinitialize();
+        return 1;
     }
 
     while (!g_stop) {

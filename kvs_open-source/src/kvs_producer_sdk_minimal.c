@@ -33,6 +33,12 @@ int kvsProducerClientCreate(const KvsProducerClientConfig* config, KvsProducerCl
         config->clientPrivateKeyPath == NULL) {
         return -1;
     }
+    if (strlen(config->region) >= sizeof(((KvsProducerClient*) 0)->region) ||
+        strlen(config->caCertPath) >= sizeof(((KvsProducerClient*) 0)->caCertPath) ||
+        strlen(config->clientCertPath) >= sizeof(((KvsProducerClient*) 0)->clientCertPath) ||
+        strlen(config->clientPrivateKeyPath) >= sizeof(((KvsProducerClient*) 0)->clientPrivateKeyPath)) {
+        return -1;
+    }
 
     client = (KvsProducerClient*) calloc(1, sizeof(KvsProducerClient));
     if (client == NULL) {
@@ -106,9 +112,5 @@ int kvsProducerPutFrame(KvsProducerStream* stream, const KvsProducerFrame* frame
 
 void kvsProducerFreeStream(KvsProducerStream* stream)
 {
-    if (stream != NULL) {
-        fprintf(stdout, "stream=%s frames=%llu bytes=%llu\n", stream->name, (unsigned long long) stream->frameCount,
-                (unsigned long long) stream->byteCount);
-    }
     free(stream);
 }
