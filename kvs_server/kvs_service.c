@@ -33,6 +33,7 @@ static pthread_cond_t g_kvs_event_cond = PTHREAD_COND_INITIALIZER;
 static bool g_kvs_event_pending = false;
 static unsigned long long g_kvs_event_seq = 0;
 static char g_kvs_event_filename[COMMON_STRING_LEN] = {0};
+static pthread_mutex_t g_kvs_stream_name_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int g_kvs_service_status = 0;
 
@@ -92,7 +93,7 @@ static void sigsegv_handler(int signum, siginfo_t *info, void *ptr)
 
     (void) ucontext;
     memset(msg, 0x0, STDERR_OUT_LEN512);
-    ret = snprintf(msg+cnt, STDERR_OUT_LEN512, "rtsp server Segmentation Fault Trace:\n");
+    ret = snprintf(msg+cnt, STDERR_OUT_LEN512, "kvs server Segmentation Fault Trace:\n");
     cnt += ret;
     ret = snprintf(msg+cnt, STDERR_OUT_LEN512, "info.si_signo = %d\n", signum);
     cnt += ret;
@@ -218,6 +219,7 @@ static int kvs_build_event_stream_name(const char *event_filename, char *stream_
     size_t offset = 0;
     const char *filename = event_filename == NULL ? "unknown" : event_filename;
     time_t now = time(NULL);
+    unsigned long long seq = 0;
 
     if (stream_name == NULL || stream_name_len == 0)
     {
@@ -251,7 +253,11 @@ static int kvs_build_event_stream_name(const char *event_filename, char *stream_
         return -1;
     }
 
-    snprintf(stream_name + offset, stream_name_len - offset, "-%llu-%ld", g_kvs_event_seq++, (long) now);
+    pthread_mutex_lock(&g_kvs_stream_name_mutex);
+    seq = g_kvs_event_seq++;
+    pthread_mutex_unlock(&g_kvs_stream_name_mutex);
+
+    snprintf(stream_name + offset, stream_name_len - offset, "-%llu-%ld", seq, (long) now);
     return 0;
 }
 
@@ -348,7 +354,7 @@ static STATUS kvs_put_video_frame(STREAM_HANDLE stream_handle, int *video_index,
     return status;
 }
 
-static STATUS kvs_put_audio_frame(STREAM_HANDLE stream_handle, MapInfo_t *audio_stream, int *audio_index, UINT64 presentation_ts, BOOL first_video_sent)
+static STATUS kvs_put_audio_frame(STREAM_HANDLE stream_handle, MapInfo_t *audio_map_info, int *audio_index, UINT64 presentation_ts, BOOL first_video_sent)
 {
     STATUS status = STATUS_SUCCESS;
     Frame audio_frame;
@@ -358,13 +364,13 @@ static STATUS kvs_put_audio_frame(STREAM_HANDLE stream_handle, MapInfo_t *audio_
     BOOL allocated = FALSE;
     int ret = -1;
 
-    if (audio_stream == NULL || audio_index == NULL || !first_video_sent)
+    if (audio_map_info == NULL || audio_index == NULL || !first_video_sent)
     {
         return STATUS_SUCCESS;
     }
 
     MEMSET(&ring_frame, 0x0, SIZEOF(FrameData_t));
-    ret = get_audio_frame_data(audio_stream, audio_index, &ring_frame);
+    ret = get_audio_frame_data(audio_map_info, audio_index, &ring_frame);
     if (ret < 0)
     {
         return STATUS_SUCCESS;
@@ -419,7 +425,7 @@ static int kvs_upload_event_stream(const char *event_filename)
     int video_index = 0;
     int audio_index = 0;
     BOOL first_video_sent = FALSE;
-    MapInfo_t *audio_stream = NULL;
+    MapInfo_t *audio_map_info = NULL;
 
     if (kvs_build_event_stream_name(event_filename, stream_name, sizeof(stream_name)) < 0)
     {
@@ -495,8 +501,8 @@ static int kvs_upload_event_stream(const char *event_filename)
             fii_log_warnning("put video frame failed.\n");
         }
 
-        audio_stream = rtp_get_audio_stream();
-        if (STATUS_FAILED(kvs_put_audio_frame(stream_handle, audio_stream, &audio_index, elapsed, first_video_sent)))
+        audio_map_info = rtp_get_audio_stream();
+        if (STATUS_FAILED(kvs_put_audio_frame(stream_handle, audio_map_info, &audio_index, elapsed, first_video_sent)))
         {
             fii_log_warnning("put audio frame failed.\n");
         }
@@ -624,6 +630,7 @@ static void *kvs_service_proc(void *exit_flag)
         }
 
         strncpy(event_filename, g_kvs_event_filename, sizeof(event_filename) - 1);
+        event_filename[sizeof(event_filename) - 1] = '\0';
         g_kvs_event_pending = false;
         pthread_mutex_unlock(&g_kvs_event_mutex);
 
