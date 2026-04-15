@@ -8,21 +8,22 @@ static int kvs_minimal_is_ready(kvs_minimal_producer_t* producer)
     return (producer != NULL && producer->initialized != 0);
 }
 
-static void kvs_copy_optional(char* dst, size_t dst_size, const char* src)
+static int kvs_copy_optional(char* dst, size_t dst_size, const char* src)
 {
     if (dst == NULL || dst_size == 0) {
-        return;
+        return -1;
     }
 
     if (src == NULL) {
         dst[0] = '\0';
-        return;
+        return 0;
     }
 
     int ret = snprintf(dst, dst_size, "%s", src);
     if (ret < 0 || (size_t) ret >= dst_size) {
-        dst[dst_size - 1] = '\0';
+        return -1;
     }
+    return 0;
 }
 
 int kvs_minimal_producer_init(const kvs_minimal_producer_config_t* cfg, kvs_minimal_producer_t* producer)
@@ -32,13 +33,15 @@ int kvs_minimal_producer_init(const kvs_minimal_producer_config_t* cfg, kvs_mini
     }
 
     memset(producer, 0x0, sizeof(*producer));
-    kvs_copy_optional(producer->region, sizeof(producer->region), cfg->region);
-    kvs_copy_optional(producer->access_key_id, sizeof(producer->access_key_id), cfg->access_key_id);
-    kvs_copy_optional(producer->secret_access_key, sizeof(producer->secret_access_key), cfg->secret_access_key);
-    kvs_copy_optional(producer->session_token, sizeof(producer->session_token), cfg->session_token);
-    kvs_copy_optional(producer->cert_path, sizeof(producer->cert_path), cfg->cert_path);
-    kvs_copy_optional(producer->private_key_path, sizeof(producer->private_key_path), cfg->private_key_path);
-    kvs_copy_optional(producer->ca_cert_path, sizeof(producer->ca_cert_path), cfg->ca_cert_path);
+    if (kvs_copy_optional(producer->region, sizeof(producer->region), cfg->region) != 0 ||
+        kvs_copy_optional(producer->access_key_id, sizeof(producer->access_key_id), cfg->access_key_id) != 0 ||
+        kvs_copy_optional(producer->secret_access_key, sizeof(producer->secret_access_key), cfg->secret_access_key) != 0 ||
+        kvs_copy_optional(producer->session_token, sizeof(producer->session_token), cfg->session_token) != 0 ||
+        kvs_copy_optional(producer->cert_path, sizeof(producer->cert_path), cfg->cert_path) != 0 ||
+        kvs_copy_optional(producer->private_key_path, sizeof(producer->private_key_path), cfg->private_key_path) != 0 ||
+        kvs_copy_optional(producer->ca_cert_path, sizeof(producer->ca_cert_path), cfg->ca_cert_path) != 0) {
+        return -1;
+    }
     producer->config.region = producer->region;
     producer->config.access_key_id = producer->access_key_id;
     producer->config.secret_access_key = producer->secret_access_key;

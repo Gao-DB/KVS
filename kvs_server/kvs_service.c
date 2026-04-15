@@ -64,6 +64,12 @@ static uint64_t kvs_ms_to_100ns(uint64_t ms)
     return ms * 10000ULL;
 }
 
+static uint64_t kvs_resolve_frame_ts_100ns(const FrameData_t* frame, uint64_t now_ms)
+{
+    uint64_t frame_ts_100ns = kvs_extract_frame_timestamp_100ns(frame);
+    return frame_ts_100ns == 0 ? kvs_ms_to_100ns(now_ms) : frame_ts_100ns;
+}
+
 static uint64_t kvs_get_env_u64(const char* name, uint64_t default_value)
 {
     const char* value = getenv(name);
@@ -420,10 +426,14 @@ static void *kvs_service_proc(void *exit_flag)
                 if (kvs_minimal_producer_create_stream(&producer, stream_name) == 0) {
                     event_active = true;
                     current_event_stop_ms = now_ms + uplink_env.event_duration_ms;
+                    next_event_trigger_ms = now_ms + uplink_env.event_interval_ms;
                     fii_log_info("CreateStream success, stream=%s\n", stream_name);
+                } else {
+                    usleep(500 * 1000);
                 }
+            } else {
+                usleep(100 * 1000);
             }
-            next_event_trigger_ms = now_ms + uplink_env.event_interval_ms;
         }
 
         if (event_active) {
@@ -440,19 +450,11 @@ static void *kvs_service_proc(void *exit_flag)
              * External frame provider should populate frame payload and timestamp.
              */
             if (get_video_frame_data(KVS_VIDEO_STREAM_MAIN_ID, &video_read_index, &video_frame) >= 0) {
-                uint64_t frame_ts_100ns = kvs_extract_frame_timestamp_100ns(&video_frame);
-                if (frame_ts_100ns == 0) {
-                    frame_ts_100ns = kvs_ms_to_100ns(now_ms);
-                }
-                kvs_minimal_producer_put_video_frame(&producer, &video_frame, frame_ts_100ns);
+                kvs_minimal_producer_put_video_frame(&producer, &video_frame, kvs_resolve_frame_ts_100ns(&video_frame, now_ms));
             }
 
             if (get_audio_frame_data(rtp_get_audio_stream(), &audio_read_index, &audio_frame) >= 0) {
-                uint64_t frame_ts_100ns = kvs_extract_frame_timestamp_100ns(&audio_frame);
-                if (frame_ts_100ns == 0) {
-                    frame_ts_100ns = kvs_ms_to_100ns(now_ms);
-                }
-                kvs_minimal_producer_put_audio_frame(&producer, &audio_frame, frame_ts_100ns);
+                kvs_minimal_producer_put_audio_frame(&producer, &audio_frame, kvs_resolve_frame_ts_100ns(&audio_frame, now_ms));
             }
 
             if (now_ms >= current_event_stop_ms) {
